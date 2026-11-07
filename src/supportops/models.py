@@ -35,13 +35,15 @@ class Ticket(Base):
     category: Mapped[Category] = relationship(back_populates="tickets")
     requester: Mapped[User] = relationship(back_populates="requested_tickets", foreign_keys=[requester_id])
     assignee: Mapped[User | None] = relationship(back_populates="assigned_tickets", foreign_keys=[assignee_id])
-    comments: Mapped[list[TicketComments]] = relationship(back_populates="ticket_comment")
+    comments: Mapped[list[TicketComments]] = relationship(back_populates="ticket_comment", order_by="TicketComments.id")
 
 
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="Customer")
@@ -64,6 +66,11 @@ class TicketComments(Base):
     comment: Mapped[str] = mapped_column(Text, nullable=False)
     date_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     commented_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    @property
+    def ticket_number(self) -> str | None:
+        return self.ticket_comment.ticket_number if self.ticket_comment else None
+
     ticket_comment: Mapped[Ticket] = relationship(back_populates="comments")
 
     commented_user: Mapped[User] = relationship(back_populates="comments")

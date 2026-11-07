@@ -1,3 +1,5 @@
+import email
+from sqlalchemy.sql import roles
 from markdown_it.common.html_re import comment
 from httpcore2 import request
 from pydantic import BaseModel, Field, ConfigDict
@@ -29,6 +31,7 @@ class TicketResponse(TicketBase):
     updated_at: datetime | None = Field(default=None, description="Time when the ticket was updated")
     resolved_at: datetime | None = Field(default=None, description="Time when the ticket was resolved")
     closed_at: datetime | None = Field(default=None, description="Time when the ticket was closed")
+    comments: list[CommentResponseWithTicket] = Field(default=None, description="Comments added to the ticket")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,14 +64,14 @@ class TicketClosed(BaseModel):
 class TicketUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None)
-    priority: str | None = Field(default=None, max_length=20)
+    priority: str | None = Field(default="Medium", max_length=20)
     category_id: int | None = Field(default=None)
     resolution: str | None = Field(default=None)
 
 
 class TicketStatusUpdate(BaseModel):
     status: str | None = Field(default=None, max_length=30)
-    resolution: str | None = Field(default=None)
+    comments: str | None = Field(default=None)
     
     model_config = ConfigDict(from_attributes=True)  
 
@@ -79,14 +82,67 @@ class TicketCommentsCreate(BaseModel):
     
     model_config = ConfigDict(from_attributes=True) 
 
-class TicketCommentsResponse(TicketCommentsCreate):
-    id: int = Field(..., description="Comment ID")
-    date_time: datetime | None = Field(default=None, description="Time when the comment was added")
-    commented_by:int = Field(..., description="User who added the comment")
-    ticket_comment: TicketResponse = Field(..., description="Ticket to which the comment was added")
-    
-    model_config = ConfigDict(from_attributes=True) 
 
+#Comments Schema
+class CommentBase(BaseModel):
+    comment: str = Field(..., description="Comment added by the user")
+    ticket_number: str = Field(..., description="Ticket to which the comment was added")
+
+class CommentResponse(CommentBase):
+    id: int = Field(..., description="Comment ID")
+    model_config = ConfigDict(from_attributes=True)
+    commented_user: UserPublicResponse = Field(..., description="User who added the comment")
+
+class UserShortResponse(BaseModel):
+    id: int = Field(..., description="User ID")
+    user_id: int = Field(validation_alias="id", description="User ID")
+    username: str = Field(..., description="Username of the user")
+
+    model_config = ConfigDict(from_attributes=True)
+
+class CommentResponseWithTicket(BaseModel):
+    id: int = Field(..., description="Comment ID")
+    comment: str = Field(..., description="Comment added by the user")
+    date_time: datetime | None = Field(default=None, description="Time when the comment was added")
+    commented_by: int | None = Field(default=None, description="User ID who added the comment")
+    commented_user: UserShortResponse = Field(..., description="User who added the comment")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+#User Schemas
+class UserBase(BaseModel):
+    username: str = Field(..., max_length=50, description="Username of the user")
+    first_name: str = Field(..., max_length=100, description="First name of the user")
+    last_name: str = Field(..., max_length=100, description="Last name of the user")
+
+
+class UserCreate(UserBase):
+    email: str = Field(..., max_length=100, description="Email of the user")
+    password: str = Field(..., max_length=255, description="Password of the user")
+
+class UserPublicResponse(UserBase):
+    username: str = Field(..., max_length=50, description="Username of the user")
+    model_config = ConfigDict(from_attributes=True)
+
+class UserResponse(UserBase):
+    id: int = Field(..., description="User ID")
+    email: str = Field(..., max_length=100, description="Email of the user")
+    role: str = Field(..., max_length=50, description="Role of the user")
+    model_config = ConfigDict(from_attributes=True)
+    
+class UserUpdate(BaseModel):
+    username: str | None = Field(default=None, max_length=50, description="Username of the user")
+    email: str | None = Field(default=None, max_length=100, description="Email of the user")
+    password: str | None = Field(default=None, max_length=255, description="Password of the user")
+
+class UserPrivateCreate(UserCreate):
+    role: str = Field(..., max_length=50, description="Role of the user")
+
+#To update the role by the admin
+class UserPrivateUpdate(BaseModel):
+    role: str  = Field(default="CUSTOMER", max_length=50, description="Role of the user")
+    
 
 #Category Schemas
 class CategoryBase(BaseModel):
@@ -101,28 +157,3 @@ class CategoryResponse(CategoryBase):
     id: int = Field(..., description="Category ID")
     model_config = ConfigDict(from_attributes=True)
     
-class CategoryUpdate(BaseModel):
-    name: str = Field(..., max_length=50, description="Name of the category")
-    description: str = Field(..., description="Detailed explanation of the category")
-
-
-#User Schemsa
-class UserBase(BaseModel):
-    username: str = Field(..., max_length=50, description="Username of the user")
-    email: str = Field(..., max_length=100, description="Email of the user")
-    password: str = Field(..., max_length=255, description="Password of the user")
-    role: str = Field(..., max_length=50, description="Role of the user")
-
-
-class UserCreate(UserBase):
-    pass
-
-class UserResponse(UserBase):
-    id: int = Field(..., description="User ID")
-    model_config = ConfigDict(from_attributes=True)
-    
-class UserUpdate(BaseModel):
-    username: str = Field(..., max_length=50, description="Username of the user")
-    email: str = Field(..., max_length=100, description="Email of the user")
-    password: str = Field(..., max_length=255, description="Password of the user")
-    role: str = Field(..., max_length=50, description="Role of the user")

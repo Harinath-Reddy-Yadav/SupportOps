@@ -1,9 +1,8 @@
-from email._header_value_parser import RouteComponentMarker
 from fastapi import APIRouter, HTTPException, status, Depends
 from supportops.schemas import (
     TicketCreate, TicketResponse, TicketAssignment, TicketResolution, 
-    TicketUpdate, TicketStatusUpdate, TicketCommentsCreate, TicketCommentsResponse,
-    TicketBasicResponse, TicketClosed
+    TicketUpdate, TicketStatusUpdate, TicketCommentsCreate,
+    TicketBasicResponse, TicketClosed,CommentResponse
 )
 from supportops.database import get_db
 from sqlalchemy.orm import Session, selectinload
@@ -46,9 +45,21 @@ def create_ticket(ticket: TicketCreate, db:Annotated[Session, Depends(get_db)]):
 @router.get("", response_model=list[TicketResponse], name="get_all_tickets", summary="Get all tickets")
 def get_all_tickets(db: Session = Depends(get_db)):
     try:
-        results = db.execute(select(models.Ticket).order_by(models.Ticket.id))
+        results = db.execute(select(models.Ticket)
+                            .options(
+                                selectinload(models.Ticket.comments)
+                                .selectinload(models.TicketComments.commented_user)
+                            )
+                            .order_by(models.Ticket.id))
         tickets = results.scalars().all()
-        return tickets
+        
+        response = []
+        for ticket in tickets:
+            ticket_data = TicketResponse.model_validate(ticket)
+            if ticket_data.comments:
+                ticket_data.comments = ticket_data.comments[-5:]
+            response.append(ticket_data)
+        return response
     except Exception as e:
         raise HTTPException(status_code= status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -58,7 +69,14 @@ def get_all_tickets(db: Session = Depends(get_db)):
 @router.get("/{id}", response_model=TicketResponse, name="get_ticket_by_id", summary="Get ticket by ID")
 def get_ticket_by_id(id: int, db: Session = Depends(get_db)):
     try:
-        result = db.execute(select(models.Ticket).filter(models.Ticket.id == id))
+        result = db.execute(
+            select(models.Ticket)
+            .options(
+                selectinload(models.Ticket.comments)
+                .selectinload(models.TicketComments.commented_user)
+            )
+            .filter(models.Ticket.id == id)
+        )
         ticket = result.scalar_one_or_none()
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -195,16 +213,24 @@ def status_update(id: int, ticket: TicketStatusUpdate, db: Session = Depends(get
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
     if ticket.status == "Resolved":
         ticket_result.status = ticket.status
-        ticket_result.resolution = ticket.resolution
+        ticket_result.resolution = ticket.comments
         ticket_result.resolved_at = datetime.now(UTC)
     elif ticket.status == "Closed":
         ticket_result.status = ticket.status
         new_comment = TicketCommentsCreate(
-            comment="Ticket has been closed",
+            comment=f"Ticket has been closed\n{ticket.comments}",
             commented_by=ticket_result.assignee_id,
         )
         add_ticket_comment(id, new_comment, db)
         ticket_result.closed_at = datetime.now(UTC)
+    else:
+        ticket_result.status = ticket.status
+        if ticket.comments:
+            new_comment = TicketCommentsCreate(
+                comment=ticket.comments,
+                commented_by=ticket_result.assignee_id,
+            )
+            add_ticket_comment(id, new_comment, db)
     ticket_result.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
@@ -212,10 +238,12 @@ def status_update(id: int, ticket: TicketStatusUpdate, db: Session = Depends(get
 
 
 #Ticket comments
-@router.post("/{id}/comments", response_model=TicketCommentsResponse, name="add_comment", summary="Add comment to ticket")
+@router.post("/{id}/comments", response_model=CommentResponse, name="add_comment", summary="Add comment to ticket")
 def add_comment(id: int, comment: TicketCommentsCreate, db: Annotated[Session, Depends(get_db)]):
     try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
+        result = db.execute(select(models.Ticket)
+                            .options(selectinload(models.Ticket.comments))
+                            .where(models.Ticket.id == id))
         ticket_result = result.scalar_one_or_none()
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
@@ -230,7 +258,7 @@ def add_comment(id: int, comment: TicketCommentsCreate, db: Annotated[Session, D
 
 
 
-#Helper functions
+## ---------------------------------------------- Helper functions -----------------------------------------------------------------##
 def add_ticket_comment(ticket_id, comment:TicketCommentsCreate, db):
     try:
         max_comment_id = db.execute(func.max(models.TicketComments.id)).scalar_one_or_none()
