@@ -1,51 +1,69 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from supportops.schemas import (
-    TicketCreate, TicketResponse, TicketAssignment, TicketResolution, 
-    TicketUpdate, TicketStatusUpdate, TicketCommentsCreate,
-    TicketBasicResponse, TicketClosed,CommentResponse
+    TicketCreate, TicketResponse, TicketAssignment,
+    TicketBasicResponse, TicketUpdate, AddTicketComment,
+    TicketStatusUpdate, CommentResponse, CommentCreate
 )
 from supportops.database import get_db
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Annotated
 from sqlalchemy import select, func
 import supportops.models as models
 import uuid
 from datetime import datetime, UTC
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter()
 
-#create ticket
+# ----------------- Create ticket -----------------
 @router.post("", response_model=TicketResponse, status_code=status.HTTP_201_CREATED, name="create_ticket", summary="Create a new ticket")
-def create_ticket(ticket: TicketCreate, db:Annotated[Session, Depends(get_db)]):
-    new_ticket = models.Ticket(**ticket.model_dump())  ##** do unpacking each dictionary item to keyword = value and model_dump() conversts pydantic object to regular python dictionary
+async def create_ticket(ticket: TicketCreate, db:Annotated[AsyncSession, Depends(get_db)]):
+    #Validate inputs
+    invalid = await validate_ticket_lookups(
+        db,
+        category_id=ticket.category_id,
+        priority_id=ticket.priority_id,
+        requester_id=ticket.requester_id,
+    )
+
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"detail": "Invalid reference values", "invalid": invalid},
+        )
+    
     #Adding the backend values to the ticket
-    max_id = db.execute(select(models.Ticket.id).order_by(models.Ticket.id.desc()).limit(1)).scalar_one_or_none()
+    max_id_result = await db.execute(select(models.Ticket.id).order_by(models.Ticket.id.desc()).limit(1))
+    max_id = max_id_result.scalar_one_or_none()
     if max_id is None:
         max_id = 1
     else:
         max_id = max_id + 1
+
+    new_ticket = models.Ticket(**ticket.model_dump())
     new_ticket.id = max_id
     new_ticket.ticket_number = "TKT"+str(uuid.uuid1().hex)[:16]
     new_ticket.created_at = datetime.now(UTC)
     new_ticket.updated_at = datetime.now(UTC)
-    new_ticket.status = "New"
-    
+    new_ticket.status_id = 1
     try:
         db.add(new_ticket)
-        db.commit()
-        db.refresh(new_ticket)
+        await db.commit()
+        await db.refresh(new_ticket)
         return new_ticket
+    except IntegrityError as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid data")
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,detail="Internal server error occured")
 
-
-#get all tickets
-@router.get("", response_model=list[TicketResponse], name="get_all_tickets", summary="Get all tickets")
-def get_all_tickets(db: Session = Depends(get_db)):
+# ----------------- Get all tickets -----------------
+@router.get("", response_model=list[TicketBasicResponse], name="get_all_tickets", summary="Get all tickets")
+async def get_all_tickets(db: Annotated[AsyncSession, Depends(get_db)]):
     try:
-        results = db.execute(select(models.Ticket)
+        results = await db.execute(select(models.Ticket)
                             .options(
                                 selectinload(models.Ticket.comments)
                                 .selectinload(models.TicketComments.commented_user)
@@ -61,219 +79,206 @@ def get_all_tickets(db: Session = Depends(get_db)):
             response.append(ticket_data)
         return response
     except Exception as e:
-        raise HTTPException(status_code= status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code= status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server error Occured")
 
 
-
-#get ticket by id
+# ----------------- Get ticket by ID -----------------
 @router.get("/{id}", response_model=TicketResponse, name="get_ticket_by_id", summary="Get ticket by ID")
-def get_ticket_by_id(id: int, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(
-            select(models.Ticket)
-            .options(
-                selectinload(models.Ticket.comments)
-                .selectinload(models.TicketComments.commented_user)
+async def get_ticket_by_id(id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+    #validate the ticket Id exits
+    exists = await validate_ticket_exists(id, db)
+    if exists:
+        try:
+            result = await db.execute(
+                select(models.Ticket)
+                .options(
+                    selectinload(models.Ticket.comments)
+                    .selectinload(models.TicketComments.commented_user)
+                )
+                .where(models.Ticket.id == id)
             )
-            .filter(models.Ticket.id == id)
-        )
-        ticket = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+            ticket = result.scalar_one_or_none()
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error occured")
+        if ticket is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
     return ticket
 
 
 
-#update ticket
+# ----------------- Update ticket -----------------
 @router.patch("/{id}", response_model=TicketResponse, name="update_ticket", summary="Update ticket")
-def update_ticket(id: int, ticket: TicketUpdate, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    if ticket_result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    update_data = ticket.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(ticket_result, key, value)  ## Another way of keyword mapping for databse insertion
-    ticket_result.updated_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
-    return ticket_result
-    
-    
+async def update_ticket(id: int, ticket: TicketUpdate, db: Annotated[AsyncSession, Depends(get_db)]):
+    #validate ticket exists
+    exists = await validate_ticket_exists(id, db)
+    if exists:
+        try:
+            #validate Priority and Category if provided
+            if ticket.priority_id is not None or ticket.category_id is not None:
+                invalid = await validate_ticket_lookups(
+                    db,
+                    priority_id=ticket.priority_id,
+                    category_id=ticket.category_id,
+                )
 
-#Delete ticket
+                if invalid:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={"detail": "Invalid reference values", "invalid": invalid},
+                    )
+
+            ticket_result = await db.get(models.Ticket, id)
+            update_data = ticket.model_dump(exclude_unset=True)
+            for key, value in update_data.items():
+                setattr(ticket_result, key, value)  ## Another way of keyword mapping for databse insertion
+            ticket_result.updated_at = datetime.now(UTC)
+            await db.commit()
+            await db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id","status_id","category_id"])
+            return ticket_result
+
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+
+# ----------------- Delete ticket -----------------
 @router.delete("/{id}", name="delete_ticket", summary="Delete ticket")
-def delete_ticket(id: int, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).filter(models.Ticket.id == id))
-        ticket = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket is None:
+async def delete_ticket(id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> dict:
+    #validate the ticket Id exists
+    exists = await validate_ticket_exists(id, db)
+    if exists:
+        try:
+            ticket = await db.get(models.Ticket, id)
+            #Delete the related comments in the db
+            comments = await db.execute(select(models.TicketComments).where(models.TicketComments.ticket_id == id))
+            for comment in comments.scalars().all():
+                await db.delete(comment)
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        await db.delete(ticket)
+        await db.commit()
+    else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-
-    #Delete the related comments in the db
-    try:
-        result = db.execute(select(models.TicketComments).where(models.TicketComments.ticket_id == id))
-        comments = result.scalars().all()
-        for comment in comments:
-            db.delete(comment)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    db.delete(ticket)
-    db.commit()
     return {"message": f"Ticket {ticket.ticket_number} deleted successfully"}
 
-#Ticket Assignemnet
+
+# ----------------- Assign ticket -----------------
 @router.post("/{id}/assign", response_model=TicketBasicResponse, name="assign_ticket", summary="Assign ticket to user")
-def assign_ticket(id: int, ticket: TicketAssignment, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    if ticket_result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    update_data = ticket.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(ticket_result, key, value)
-    ticket_result.updated_at = datetime.now(UTC)
-    ticket_result.status = "Assigned"
-    db.commit()
-    db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
-    return ticket_result
-
-
-#ticket resolution
-@router.post("/{id}/resolve", response_model=TicketBasicResponse, name="resolve_ticket", summary="Resolve ticket")
-def resolve_ticket(id: int, ticket: TicketResolution, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket_result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    if ticket.resolution is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Resolution is required")
-    ticket_result.resolution = ticket.resolution
-    ticket_result.status = "Resolved"
-    ticket_result.resolved_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
-    return ticket_result
-
- #Ticket closure with comment
-@router.post("/{id}/close", response_model=TicketBasicResponse, name="close_ticket", summary="Close ticket")
-def close_ticket(id: int, ticket: TicketClosed, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket_result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    if ticket.comment is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is required")
-
-    #Adding the comment to the ticket
-    comment=TicketCommentsCreate(
-        comment=ticket.comment,
-        commented_by=ticket_result.requester_id
-    )
-    add_ticket_comment(id, comment, db)
-    
-    ticket_result.status = "Closed"
-    ticket_result.closed_at = datetime.now(UTC)
-    
-    db.commit()
-    db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
-    return ticket_result
-
-
-
-#Ticket status update
-@router.post("/{id}/status", response_model=TicketBasicResponse, name="status_update", summary="Update ticket status")
-def status_update(id: int, ticket: TicketStatusUpdate, db: Session = Depends(get_db)):
-    try:
-        result = db.execute(select(models.Ticket).where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket_result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    if ticket.status not in ["New", "Assigned", "Resolved", "Closed"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
-    if ticket.status == "Resolved":
-        ticket_result.status = ticket.status
-        ticket_result.resolution = ticket.comments
-        ticket_result.resolved_at = datetime.now(UTC)
-    elif ticket.status == "Closed":
-        ticket_result.status = ticket.status
-        new_comment = TicketCommentsCreate(
-            comment=f"Ticket has been closed\n{ticket.comments}",
-            commented_by=ticket_result.assignee_id,
-        )
-        add_ticket_comment(id, new_comment, db)
-        ticket_result.closed_at = datetime.now(UTC)
+async def assign_ticket(id: int, ticket: TicketAssignment, db: Annotated[AsyncSession, Depends(get_db)]):
+    exists = await validate_ticket_exists(id, db)
+    if exists:
+        ticket_result = await db.get(models.Ticket,id)
+        update_data = ticket.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(ticket_result, key, value)
+        ticket_result.updated_at = datetime.now(UTC)
+        ticket_result.status_id = 2
+        await db.commit()
+        await db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id","status_id","category_id"])
+        return ticket_result
     else:
-        ticket_result.status = ticket.status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+
+# ----------------- Status update -----------------
+@router.post("/{id}/status", response_model=TicketBasicResponse, name="status_update", summary="Update ticket status")
+@router.post("/{id}/resolve", response_model=TicketBasicResponse)
+@router.post("/{id}/close", response_model=TicketBasicResponse)
+async def status_update(id: int, ticket: TicketStatusUpdate, db: Annotated[AsyncSession, Depends(get_db)]):
+    exists = await validate_ticket_exists(id, db)
+    if exists:
+        #verify ticket status_id is valid and comment is not none for closed and resolved
+        invalid_status = await validate_ticket_lookups(db, status_id=ticket.status_id)
+        if invalid_status:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid status {invalid_status}")
+        
+        if ticket.status_id in [5,6] and not ticket.comments:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is required for resolved and closed tickets")
+        
+        result = await db.get(models.Ticket, id)
+        result.status_id = ticket.status_id
         if ticket.comments:
-            new_comment = TicketCommentsCreate(
-                comment=ticket.comments,
-                commented_by=ticket_result.assignee_id,
-            )
-            add_ticket_comment(id, new_comment, db)
-    ticket_result.updated_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id"])
-    return ticket_result
+            new_comment = AddTicketComment(comment=ticket.comments, commented_by=result.assignee_id)
+        else:
+            new_comment = f"The status has been updated from {result.status_id} to {ticket.status_id}"
+        await add_ticket_comment(new_comment, db)
+        result.updated_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(result, attribute_names=["category_id", "assignee_id", "requester_id","status_id"])
+        return result
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
 
 
+# ----------------- Add Comments to ticket -----------------
 #Ticket comments
 @router.post("/{id}/comments", response_model=CommentResponse, name="add_comment", summary="Add comment to ticket")
-def add_comment(id: int, comment: TicketCommentsCreate, db: Annotated[Session, Depends(get_db)]):
+async def add_comment(comment: CommentCreate, db: Annotated[AsyncSession, Depends(get_db)]):
     try:
-        result = db.execute(select(models.Ticket)
-                            .options(selectinload(models.Ticket.comments))
-                            .where(models.Ticket.id == id))
-        ticket_result = result.scalar_one_or_none()
+        if comment.comment is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is required")
+        if comment.ticket_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket ID is required")
+        if comment.commented_by is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID for commenting is required")
+        add_comment = await add_ticket_comment(comment, db)
+        return add_comment
+
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to add comment")
+
+
+# ----------------- Helper functions -----------------
+#Validate ticket exists helper function
+async def validate_ticket_exists(id: int, db: Annotated[AsyncSession, Depends(get_db)]) -> bool:
+    try:
+        result = await db.execute(select(models.Ticket).filter(models.Ticket.id == id))
+        return result.scalar_one_or_none() is not None
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    if ticket_result is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
-    if comment.comment is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is required")
-    if comment.commented_by is None:
-        comment.commented_by = ticket_result.requester_id
-    new_comment = add_ticket_comment(id, comment, db)
-    return new_comment
+async def validate_ticket_lookups(
+    db: AsyncSession,
+    category_id: int | None = None,
+    priority_id: int | None = None,
+    requester_id: int | None = None,
+    assignee_id: int | None = None,
+    status_id: int | None = None,
+    role_id: int | None = None,
+) -> list[str]:
+    invalid_fields: list[str] = []
+
+    if category_id is not None and not await db.get(models.Category, category_id):
+        invalid_fields.append(f"Category with id {category_id} not found")
+    if priority_id is not None and not await db.get(models.Priority, priority_id):
+        invalid_fields.append(f"Priority with id {priority_id} not found")
+    if requester_id is not None and not await db.get(models.User, requester_id):
+        invalid_fields.append(f"Requester user with id {requester_id} not found")
+    if assignee_id is not None and not await db.get(models.User, assignee_id):
+        invalid_fields.append(f"Assignee user with id {assignee_id} not found")
+    if status_id is not None and not await db.get(models.Status, status_id):
+        invalid_fields.append(f"Status with id {status_id} not found")
+    if role_id is not None and not await db.get(models.Role, role_id):
+        invalid_fields.append(f"Role with id {role_id} not found")
+
+    return invalid_fields
 
 
-
-## ---------------------------------------------- Helper functions -----------------------------------------------------------------##
-def add_ticket_comment(ticket_id, comment:TicketCommentsCreate, db):
+async def add_ticket_comment(comment: AddTicketComment, db: AsyncSession):
     try:
-        max_comment_id = db.execute(func.max(models.TicketComments.id)).scalar_one_or_none()
         new_comment = models.TicketComments(
-            id=max_comment_id + 1 if max_comment_id is not None else 1,
-            ticket_id = ticket_id,
+            ticket_id=comment.ticket_id,
             comment=comment.comment,
-            commented_by=comment.commented_by,
+            commented_by=comment.user_id,
             date_time=datetime.now(UTC),
         )
         db.add(new_comment)
-        db.commit()
-        db.refresh(new_comment)
+        await db.commit()
+        await db.refresh(new_comment)
         return new_comment
     except Exception as e:
-        db.rollback()
+        await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-        

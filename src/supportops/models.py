@@ -19,23 +19,24 @@ class Ticket(Base):
     ticket_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="New")
-    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="Medium")
+    status_id: Mapped[int] = mapped_column(ForeignKey("status.id"), nullable=False) #New, Assigned, In Progress, On Hold, Resolved, Closed, Reopened
+    priority_id: Mapped[int] = mapped_column(ForeignKey("priorities.id"), nullable=False) #Low, Medium, High, Critical
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"), nullable=False)
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     assignee_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC), nullable=False)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     # Relationships
     category: Mapped[Category] = relationship(back_populates="tickets")
     requester: Mapped[User] = relationship(back_populates="requested_tickets", foreign_keys=[requester_id])
     assignee: Mapped[User | None] = relationship(back_populates="assigned_tickets", foreign_keys=[assignee_id])
     comments: Mapped[list[TicketComments]] = relationship(back_populates="ticket_comment", order_by="TicketComments.id")
+    
+    ticket_priority: Mapped[Priority] = relationship(back_populates="ticket_pri")
+    ticket_status: Mapped[Status] = relationship(back_populates="ticket_stat")
+
 
 
 class User(Base):
@@ -46,16 +47,25 @@ class User(Base):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(50), nullable=False, default="Customer")
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     last_logged_in: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    @property
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+
+    @property
+    def role_name(self) -> str | None:
+        return self.role.name if self.role else None
 
     # Separate relationships for requester vs assignee
     requested_tickets: Mapped[list[Ticket]] = relationship(back_populates="requester", foreign_keys="[Ticket.requester_id]")
     assigned_tickets: Mapped[list[Ticket]] = relationship(back_populates="assignee", foreign_keys="[Ticket.assignee_id]")
     comments: Mapped[list[TicketComments]] = relationship(back_populates="commented_user")
+    role: Mapped[Role] = relationship(back_populates="users")
 
 
 
@@ -74,3 +84,30 @@ class TicketComments(Base):
     ticket_comment: Mapped[Ticket] = relationship(back_populates="comments")
 
     commented_user: Mapped[User] = relationship(back_populates="comments")
+
+
+class Priority(Base):
+    __tablename__ = "Priorities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+
+    ticket_pri: Mapped[list[Ticket]] = relationship(back_populates="ticket_priority")
+
+
+class Status(Base):
+    __tablename__ = "Status"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+
+    ticket_stat: Mapped[list[Ticket]] = relationship(back_populates="ticket_status")
+
+
+class Role(Base):
+    __tablename__ = "roles"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False) #"customer", "agent", "manager", "admin"
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+
+    users: Mapped[list[User]] = relationship(back_populates="role")
