@@ -8,6 +8,7 @@ from supportops.schemas import (
     UserResponse, UserPrivateCreate, UserCreate,
     UserRoleUpdate, UserUpdate
 )
+from supportops.auth import hash_password, get_current_user
 
 router = APIRouter()
 
@@ -19,7 +20,10 @@ async def create_user(
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     await validate_username_and_email_valid(user.username, user.email, db)
-    new_user = models.User(**user.model_dump())
+    user_dict = user.model_dump()
+    plain_password = user_dict.pop("password")
+    new_user = models.User(**user_dict)
+    new_user.password_hash = hash_password(plain_password)
     new_user.role_id = 1
     
     db.add(new_user)
@@ -32,7 +36,9 @@ async def create_user(
 @router.post("/admin", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create user with custom role by admin")
 @router.post("/manager", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create user with custom role by manager")
 async def create_user_admin(
+    request: Request,
     user: UserPrivateCreate,
+    current_user: Annotated[models.User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     await validate_username_and_email_valid(user.username, user.email, db)
@@ -42,27 +48,18 @@ async def create_user_admin(
         if not role:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Specified role_id does not exist")
 
-    new_user = models.User(**user.model_dump())
+    user_dict = user.model_dump()
+    plain_password = user_dict.pop("password")
+    new_user = models.User(**user_dict)
+    new_user.password_hash = hash_password(plain_password)
     if new_user.role_id is None:
         new_user.role_id = 1
-    if Request.url.path.endswith("/manager"):
-        new_user.manager_id = user.id
+    if request.url.path.endswith("/manager"):
+        new_user.manager_id = current_user.id
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
     return new_user
-
-
-# ----------------- 3. Current User -----------------
-@router.get("/me", response_model=UserResponse, summary="Get current logged in user")
-async def get_current_user(
-    user_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)]
-):
-    current_user = await db.get(models.User, user_id)
-    if not current_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return current_user
 
 
 # ----------------- 4. Get All users by admin -----------------
@@ -97,8 +94,11 @@ async def update_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     await validate_user_update(user_id, user, db)
+    update_dict = user.model_dump(exclude_unset=True)
+    if "password" in update_dict:
+        existing_user.password_hash = hash_password(update_dict.pop("password"))
 
-    for field, value in user.model_dump(exclude_unset=True).items():
+    for field, value in update_dict.items():
         setattr(existing_user, field, value)
 
     try:
@@ -154,15 +154,15 @@ async def delete_user(
 
 
 # ----------------- Helper functions -----------------
-async def validate_username_and_email_valid(user: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]) -> bool:
-    email_res = db.execute(select(models.User).where(models.User.email == user.email))
+async def validate_username_and_email_valid(username: str, email: str, db: AsyncSession) -> bool:
+    email_res = await db.execute(select(models.User).where(models.User.email == email))
     email_user = email_res.scalar_one_or_none()
     if email_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already exists"
         )
-    user_res = await db.execute(select(models.User).where(models.User.username == user.username))
+    user_res = await db.execute(select(models.User).where(models.User.username == username))
     user_name = user_res.scalar_one_or_none()
     if user_name:
         raise HTTPException(

@@ -86,5 +86,3 @@ async def delete_comment(comment_id: int, db: Annotated[AsyncSession, Depends(ge
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete comment")
-
-router = APIRouter()

@@ -46,12 +46,13 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    password: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     last_logged_in: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    profile_pic: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     @property
     def full_name(self) -> str:
@@ -60,6 +61,16 @@ class User(Base):
     @property
     def role_name(self) -> str | None:
         return self.role.name if self.role else None
+
+    @property
+    def image_path(self) -> str | None:
+        return f"/media/profile_pics/{self.profile_pic}" if self.profile_pic else None
+
+    manager: Mapped[User | None] = relationship(
+        "User",
+        remote_side="User.id",
+        backref="subordinates"
+    )
 
     # Separate relationships for requester vs assignee
     requested_tickets: Mapped[list[Ticket]] = relationship(back_populates="requester", foreign_keys="[Ticket.requester_id]")

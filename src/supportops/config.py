@@ -7,4 +7,9 @@ class Settings(BaseSettings):
     #Databse URl ex: """sqlite:///./support.db""", """postgresql://postgres:[EMAIL_ADDRESS]/supportops"""
     database_url: SecretStr
 
+    secret_key: SecretStr
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 20
+
+
 settings = Settings()

@@ -72,7 +72,7 @@ class UserCreate(UserBase):
     first_name: str = Field(..., max_length=100, description="First name of the user")
     last_name: str = Field(..., max_length=100, description="Last name of the user")
     email: EmailStr = Field(..., description="Email of the user")
-    password: str = Field(..., max_length=255, description="Password of the user")
+    password_hash: str = Field(..., max_length=255, description="Password of the user")
 
 class UserPrivateCreate(UserCreate):
     role_id: int = Field(default=1, description="Role of the user")
@@ -90,6 +90,8 @@ class UserPublicResponse(UserShortResponse):
 
 class UserResponse(UserPublicResponse):
     email: EmailStr = Field(..., description="Email of the user")
+    manager_id: int | None = Field(default=None, description="Manager ID of the user")
+    manager: UserShortResponse | None = Field(default=None, description="Manager of the user")
     model_config = ConfigDict(from_attributes=True)
 
 class UserUpdate(BaseModel):
@@ -111,8 +113,7 @@ class CommentBase(BaseModel):
     comment: str = Field(..., description="Comment added by the user")
 
 class CommentCreate(CommentBase):
-    ticket_id: int = Field(..., description="Ticket to which the comment was added")
-    user_id: int = Field(..., description="User who added the comment")
+    pass
 
 class AddTicketComment(BaseModel):
     comment: str | None = Field(default=None, description="Comment added by the user")
@@ -145,7 +146,6 @@ class TicketBase(BaseModel):
     description: str = Field(..., description="Detailed explanation of the issue")
 
 class TicketCreate(TicketBase):
-    requester_id: int | None = Field(default=None, description="User who reported the issue")
     priority_id: int = Field(..., description="Priority of the ticket")
     category_id: int = Field(..., description="Category of the ticket")
 
@@ -182,3 +182,18 @@ class TicketStatusUpdate(BaseModel):
     status_id: int = Field(..., description="Status of the ticket")
     comments: str | None = Field(default=None)
     model_config = ConfigDict(from_attributes=True)
+
+# ==========================================
+# 5. Token Schemas for Authentication
+# ==========================================
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    username: str | None = None
+
+class TokenPayload(BaseModel):
+    sub: str | None = None

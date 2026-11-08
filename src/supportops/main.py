@@ -5,6 +5,8 @@ from supportops.Routers.v1.TicketRoutes import router as ticket_router
 from supportops.Routers.v1.UserRoutes import router as user_router
 from supportops.Routers.v1.commentRoutes import router as comment_router
 from supportops.Routers.v1.CategoryRoutes import router as category_router
+from supportops.Routers.login import router as auth_router
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -22,6 +24,7 @@ app.include_router(ticket_router, prefix="/tickets", tags=["Tickets"])
 app.include_router(user_router, prefix="/users", tags=["Users"])
 app.include_router(comment_router, prefix="/comments", tags=["Comments"])
 app.include_router(category_router, prefix="/categories", tags=["Categories"])
+app.include_router(auth_router, prefix="/auth/login", tags=["Authentication"])
 
 
 @app.get("/")

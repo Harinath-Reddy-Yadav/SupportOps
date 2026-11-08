@@ -13,19 +13,21 @@ import supportops.models as models
 import uuid
 from datetime import datetime, UTC
 from sqlalchemy.exc import IntegrityError
+from supportops.auth import get_current_user
 
 router = APIRouter()
 
 # ----------------- Create ticket -----------------
 @router.post("", response_model=TicketResponse, status_code=status.HTTP_201_CREATED, name="create_ticket", summary="Create a new ticket")
-async def create_ticket(ticket: TicketCreate, db:Annotated[AsyncSession, Depends(get_db)]):
+async def create_ticket(ticket: TicketCreate, current_user: Annotated[models.User, Depends(get_current_user)],  db:Annotated[AsyncSession, Depends(get_db)]):
     #Validate inputs
     invalid = await validate_ticket_lookups(
         db,
         category_id=ticket.category_id,
         priority_id=ticket.priority_id,
-        requester_id=ticket.requester_id,
+        requester_id=current_user.id,
     )
+    
 
     if invalid:
         raise HTTPException(
@@ -42,6 +44,7 @@ async def create_ticket(ticket: TicketCreate, db:Annotated[AsyncSession, Depends
         max_id = max_id + 1
 
     new_ticket = models.Ticket(**ticket.model_dump())
+    new_ticket.requester_id = current_user.id
     new_ticket.id = max_id
     new_ticket.ticket_number = "TKT"+str(uuid.uuid1().hex)[:16]
     new_ticket.created_at = datetime.now(UTC)
@@ -188,7 +191,7 @@ async def assign_ticket(id: int, ticket: TicketAssignment, db: Annotated[AsyncSe
 @router.post("/{id}/status", response_model=TicketBasicResponse, name="status_update", summary="Update ticket status")
 @router.post("/{id}/resolve", response_model=TicketBasicResponse)
 @router.post("/{id}/close", response_model=TicketBasicResponse)
-async def status_update(id: int, ticket: TicketStatusUpdate, db: Annotated[AsyncSession, Depends(get_db)]):
+async def status_update(id: int, ticket: TicketStatusUpdate, current_user: Annotated[models.User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     exists = await validate_ticket_exists(id, db)
     if exists:
         #verify ticket status_id is valid and comment is not none for closed and resolved
@@ -202,7 +205,7 @@ async def status_update(id: int, ticket: TicketStatusUpdate, db: Annotated[Async
         result = await db.get(models.Ticket, id)
         result.status_id = ticket.status_id
         if ticket.comments:
-            new_comment = AddTicketComment(comment=ticket.comments, commented_by=result.assignee_id)
+            new_comment = AddTicketComment(comment=ticket.comments, commented_by=current_user.id, ticket_id=id)
         else:
             new_comment = f"The status has been updated from {result.status_id} to {ticket.status_id}"
         await add_ticket_comment(new_comment, db)
@@ -217,15 +220,15 @@ async def status_update(id: int, ticket: TicketStatusUpdate, db: Annotated[Async
 # ----------------- Add Comments to ticket -----------------
 #Ticket comments
 @router.post("/{id}/comments", response_model=CommentResponse, name="add_comment", summary="Add comment to ticket")
-async def add_comment(comment: CommentCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+async def add_comment(comment: CommentCreate, current_user: Annotated[models.User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
     try:
         if comment.comment is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Comment is required")
         if comment.ticket_id is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ticket ID is required")
-        if comment.commented_by is None:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User ID for commenting is required")
-        add_comment = await add_ticket_comment(comment, db)
+
+        new_comment = AddTicketComment(comment=comment.comment, commented_by=current_user.id, ticket_id=id)
+        add_comment = await add_ticket_comment(new_comment, db)
         return add_comment
 
     except Exception as e:
