@@ -1,3 +1,4 @@
+from ssl import CERT_REQUIRED
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,8 +9,9 @@ from supportops.schemas import (
     UserResponse, UserPrivateCreate, UserCreate,
     UserRoleUpdate, UserUpdate
 )
-from supportops.auth import hash_password, get_current_user
-
+from supportops.auth import hash_password, CurrentUser, AdminUser, ManagerUser, StaffUser
+from datetime import datetime, UTC
+from sqlalchemy import update
 router = APIRouter()
 
 
@@ -38,7 +40,7 @@ async def create_user(
 async def create_user_admin(
     request: Request,
     user: UserPrivateCreate,
-    current_user: Annotated[models.User, Depends(get_current_user)],
+    current_user: ManagerUser,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     await validate_username_and_email_valid(user.username, user.email, db)
@@ -47,6 +49,13 @@ async def create_user_admin(
         role = await db.get(models.Role, user.role_id)
         if not role:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Specified role_id does not exist")
+    
+        # Security Rule: Managers cannot assign Admin role
+        if current_user.role.name.lower() == "manager" and role.name.lower() == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers are not allowed to create or assign Admin accounts. Please contact admin."
+            )
 
     user_dict = user.model_dump()
     plain_password = user_dict.pop("password")
@@ -65,16 +74,26 @@ async def create_user_admin(
 # ----------------- 4. Get All users by admin -----------------
 @router.get("/admin/users", response_model=list[UserResponse], summary="Get all users by admin")
 async def get_all_users(
+    current_user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     result = await db.execute(select(models.User).order_by(models.User.id))
     return result.scalars().all()
 
+# ----------------- 4. Get All users assigned to manager -----------------
+@router.get("/manager/users", response_model=list[UserResponse], summary="Get all users assigned to manager")
+async def get_all_users_manager(
+    current_user: ManagerUser,
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    result = await db.execute(select(models.User).where(models.User.manager_id == current_user.id).order_by(models.User.id))
+    return result.scalars().all()
 
-# ----------------- 4. Dynamic Parameterized routes -----------------
+# ----------------- 5. Get user by ID -----------------
 @router.get("/{user_id}", response_model=UserResponse, summary="Get user by ID")
 async def get_user_by_id(
     user_id: int,
+    current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     user = await db.get(models.User, user_id)
@@ -82,13 +101,20 @@ async def get_user_by_id(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return user
 
-
+# ----------------- 6. Update user details -----------------
 @router.put("/{user_id}", response_model=UserResponse, summary="Update user details")
 async def update_user(
     user_id: int,
     user: UserUpdate,
-    db: Annotated[AsyncSession, Depends(get_db)]
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    is_admin = current_user.role and current_user.role.name.lower() == "admin"
+    if current_user.id != user_id and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to update another user's profile"
+        )
     existing_user = await db.get(models.User, user_id)
     if not existing_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -110,15 +136,24 @@ async def update_user(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update user")
 
 
+# ----------------- 6. Update user role by Manager or Admin-----------------
 @router.put("/{user_id}/role", response_model=UserResponse, summary="Update user role")
 async def update_user_role(
     user_id: int,
     user_role: UserRoleUpdate,
+    current_user: ManagerUser,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     existing_user = await db.get(models.User, user_id)
     if not existing_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        # Security Rule: Managers cannot assign Admin role
+        if current_user.role.name.lower() == "manager" and role.name.lower() == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers are not allowed to create or assign Admin accounts. Please contact admin."
+            )
 
     if user_role.role_id is not None:
         role = await db.get(models.Role, user_role.role_id)
@@ -135,22 +170,41 @@ async def update_user_role(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update user role")
 
 
+# ----------------- 7. Soft Delete user by Manager or Admin -----------------
 @router.delete("/{user_id}", summary="Delete user")
 async def delete_user(
     user_id: int,
+    current_user: ManagerUser,
     db: Annotated[AsyncSession, Depends(get_db)]
 ):
     existing_user = await db.get(models.User, user_id)
-    if not existing_user:
+    if not existing_user or existing_user.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    try:
-        await db.delete(existing_user)
-        await db.commit()
-        return {"message": "User deleted successfully"}
-    except Exception:
-        await db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete user with associated tickets/comments")
+    # Security Rule: Managers cannot delete Admin accounts
+    target_user_role = existing_user.role.name.lower() if existing_user.role else ""
+    if current_user.role and current_user.role.name.lower() == "manager":
+        if target_user_role == "admin" or target_user_role == "manager":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers are not allowed to delete Admin or Manager accounts."
+            )
+
+    # 1. Unassign tickets that were assigned to this user
+    await db.execute(
+        update(models.Ticket)
+        .where(models.Ticket.assignee_id == user_id)
+        .values(assignee_id=None)
+    )
+
+    # 2. Free up email & username for future re-registration and mark deleted
+    existing_user.email = f"deleted_{existing_user.id}_{existing_user.email}"
+    existing_user.username = f"deleted_{existing_user.id}_{existing_user.username}"
+    existing_user.deleted_at = datetime.now(UTC)
+    existing_user.is_active = False
+
+    await db.commit()
+    return {"message": "User deleted successfully"}
 
 
 # ----------------- Helper functions -----------------

@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from supportops.database import get_db
 from supportops.schemas import CategoryCreate, CategoryResponse, ReassignCategoryTickets
 import supportops.models as models
+from supportops.auth import CurrentUser, ManagerUser,AdminUser
 
 router = APIRouter()
 
@@ -14,6 +15,7 @@ router = APIRouter()
 @router.post("", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED, summary="Create a new category")
 async def create_category(
     category: CategoryCreate,
+    current_user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     new_category = models.Category(**category.model_dump())
@@ -39,7 +41,7 @@ async def create_category(
 
 # ----------------- Get All Categories -----------------
 @router.get("", response_model=list[CategoryResponse], summary="Get all categories")
-async def get_all_categories(db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_all_categories(current_user:CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]):
     try:
         result = await db.execute(select(models.Category).order_by(models.Category.id))
         return result.scalars().all()
@@ -54,6 +56,7 @@ async def get_all_categories(db: Annotated[AsyncSession, Depends(get_db)]):
 @router.get("/{category_id}", response_model=CategoryResponse, summary="Get a category by ID")
 async def get_category_by_id(
     category_id: int,
+    current_user:CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     category = await db.get(models.Category, category_id)
@@ -70,6 +73,7 @@ async def get_category_by_id(
 async def update_category(
     category_id: int,
     category_data: CategoryCreate,
+    current_user:AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     existing_category = await db.get(models.Category, category_id)
@@ -106,6 +110,7 @@ async def update_category(
 @router.delete("/{category_id}", summary="Delete a category")
 async def delete_category(
     category_id: int,
+    current_user:AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     existing_category = await db.get(models.Category, category_id)
@@ -139,12 +144,11 @@ async def delete_category(
 async def reassign_category_tickets(
     category_id: int,
     payload: ReassignCategoryTickets,
+    current_user:AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    # 1. Check old category exists
+    # 1. Get old category 
     old_category = await db.get(models.Category, category_id)
-    if not old_category:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source category not found")
     # 2. Check target category exists
     new_category = await db.get(models.Category, payload.new_category_id)
     if not new_category:

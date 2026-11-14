@@ -53,6 +53,7 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     profile_pic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True) 
 
     @property
     def full_name(self) -> str:
@@ -98,7 +99,7 @@ class TicketComments(Base):
 
 
 class Priority(Base):
-    __tablename__ = "Priorities"
+    __tablename__ = "priorities"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
@@ -107,7 +108,7 @@ class Priority(Base):
 
 
 class Status(Base):
-    __tablename__ = "Status"
+    __tablename__ = "status"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)

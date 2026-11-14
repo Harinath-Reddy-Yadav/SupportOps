@@ -5,12 +5,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from supportops.constants import RoleEnum
 
 from supportops.auth import (
     create_access_token,
     verify_password,
-    decode_access_token,
-    oauth2_scheme,
+    get_current_user
 )
 from supportops.database import get_db
 import supportops.models as models
@@ -34,7 +34,9 @@ async def login(
 
     # Allow login by username OR email
     result = await db.execute(
-        select(models.User).where(
+        select(models.User)
+        .options(selectinload(models.User.role))
+        .where(
             or_(
                 models.User.username == form_data.username,
                 models.User.email == form_data.username,
@@ -50,8 +52,16 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your account is not active. Please contact your manager or admin.",
+        )
+
+    role_name = user.role.name.lower() if user.role else RoleEnum.USER.value
+
     access_token = create_access_token(
-        data={"sub": str(user.id)},
+        data={"sub": str(user.id), "role": role_name},
         expires_delta=timedelta(minutes=30),
     )
     return Token(access_token=access_token, token_type="bearer")
@@ -60,43 +70,6 @@ async def login(
 # ----------------- 2. Current User (/me) -----------------
 @router.get("/me", response_model=UserResponse, summary="Get current logged in user")
 async def get_current_user_route(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_user)]
 ):
-    payload = decode_access_token(token)
-    sub = payload.get("sub")
-
-    if sub is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    try:
-        user_id = int(sub)
-    except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    result = await db.execute(
-        select(models.User)
-        .options(
-            selectinload(models.User.manager),
-            selectinload(models.User.role),
-        )
-        .where(models.User.id == user_id)
-    )
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
+    return current_user
