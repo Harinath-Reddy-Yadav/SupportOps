@@ -37,19 +37,9 @@ async def create_ticket(ticket: TicketCreate, current_user: CurrentUser,  db:Ann
         )
     
     #Adding the backend values to the ticket
-    max_id_result = await db.execute(select(models.Ticket.id).order_by(models.Ticket.id.desc()).limit(1))
-    max_id = max_id_result.scalar_one_or_none()
-    if max_id is None:
-        max_id = 1
-    else:
-        max_id = max_id + 1
-
     new_ticket = models.Ticket(**ticket.model_dump())
     new_ticket.requester_id = current_user.id
-    new_ticket.id = max_id
     new_ticket.ticket_number = "TKT"+str(uuid.uuid1().hex)[:16]
-    new_ticket.created_at = datetime.now(UTC)
-    new_ticket.updated_at = datetime.now(UTC)
     new_ticket.status_id = TicketStatusEnum.NEW.value
     try:
         db.add(new_ticket)
@@ -190,7 +180,7 @@ async def update_ticket(current_user:CurrentUser, id: int, ticket: TicketUpdate,
                 setattr(ticket_result, key, value)  ## Another way of keyword mapping for databse insertion
             ticket_result.updated_at = datetime.now(UTC)
             await db.commit()
-            await db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id","status_id","category_id"])
+            await db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id", "status_id", "priority_id"])
             return ticket_result
 
         except Exception as e:

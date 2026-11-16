@@ -11,8 +11,8 @@ from supportops.Routers.login import router as auth_router
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     print("Starting up...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)   #Needed becasue we are not using Alembic for DB migrations
+    # async with engine.begin() as conn:
+    #     await conn.run_sync(Base.metadata.create_all)   #Needed becasue we are not using Alembic for DB migrations
     yield
     print("Shutting down...")
     await engine.dispose()
