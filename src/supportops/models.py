@@ -29,13 +29,13 @@ class Ticket(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
-    category: Mapped[Category] = relationship(back_populates="tickets")
-    requester: Mapped[User] = relationship(back_populates="requested_tickets", foreign_keys=[requester_id])
-    assignee: Mapped[User | None] = relationship(back_populates="assigned_tickets", foreign_keys=[assignee_id])
-    comments: Mapped[list[TicketComments]] = relationship(back_populates="ticket_comment", order_by="TicketComments.id")
+    category: Mapped[Category] = relationship(back_populates="tickets", lazy="selectin")
+    requester: Mapped[User] = relationship(back_populates="requested_tickets", foreign_keys=[requester_id], lazy="selectin")
+    assignee: Mapped[User | None] = relationship(back_populates="assigned_tickets", foreign_keys=[assignee_id], lazy="selectin")
+    comments: Mapped[list[TicketComments]] = relationship(back_populates="ticket_comment", order_by="TicketComments.id", lazy="selectin")
     
-    ticket_priority: Mapped[Priority] = relationship(back_populates="ticket_pri")
-    ticket_status: Mapped[Status] = relationship(back_populates="ticket_stat")
+    ticket_priority: Mapped[Priority] = relationship(back_populates="ticket_pri", lazy="selectin")
+    ticket_status: Mapped[Status] = relationship(back_populates="ticket_stat", lazy="selectin")
 
 
 
@@ -70,14 +70,15 @@ class User(Base):
     manager: Mapped[User | None] = relationship(
         "User",
         remote_side="User.id",
-        backref="subordinates"
+        backref="subordinates",
+        lazy="selectin"
     )
 
     # Separate relationships for requester vs assignee
     requested_tickets: Mapped[list[Ticket]] = relationship(back_populates="requester", foreign_keys="[Ticket.requester_id]")
     assigned_tickets: Mapped[list[Ticket]] = relationship(back_populates="assignee", foreign_keys="[Ticket.assignee_id]")
     comments: Mapped[list[TicketComments]] = relationship(back_populates="commented_user")
-    role: Mapped[Role] = relationship(back_populates="users")
+    role: Mapped[Role] = relationship(back_populates="users", lazy="selectin")
 
 
 
@@ -93,9 +94,9 @@ class TicketComments(Base):
     def ticket_number(self) -> str | None:
         return self.ticket_comment.ticket_number if self.ticket_comment else None
 
-    ticket_comment: Mapped[Ticket] = relationship(back_populates="comments")
+    ticket_comment: Mapped[Ticket] = relationship(back_populates="comments", lazy="selectin")
 
-    commented_user: Mapped[User] = relationship(back_populates="comments")
+    commented_user: Mapped[User] = relationship(back_populates="comments", lazy="selectin")
 
 
 class Priority(Base):

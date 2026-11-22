@@ -72,7 +72,7 @@ class UserCreate(UserBase):
     first_name: str = Field(..., max_length=100, description="First name of the user")
     last_name: str = Field(..., max_length=100, description="Last name of the user")
     email: EmailStr = Field(..., description="Email of the user")
-    password_hash: str = Field(..., max_length=255, description="Password of the user")
+    password: str = Field(..., max_length=255, description="Password of the user")
 
 class UserPrivateCreate(UserCreate):
     role_id: int = Field(default=1, description="Role of the user")
@@ -123,6 +123,7 @@ class AddTicketComment(BaseModel):
 
 class CommentResponseWithTicket(BaseModel):
     id: int = Field(..., description="Comment ID")
+    comment: str = Field(..., description="The comment content")
     ticket_number: str = Field(..., description="Ticket number")
     date_time: datetime | None = Field(default=None, description="Time when the comment was added")
     commented_user: UserShortResponse = Field(..., description="User who added the comment")

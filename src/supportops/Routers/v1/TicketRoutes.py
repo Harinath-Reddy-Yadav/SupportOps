@@ -113,23 +113,25 @@ async def get_assigned_tickets(
 # ----------------- 4. Get ticket by ID -----------------
 @router.get("/{id}", response_model=TicketResponse, name="get_ticket_by_id", summary="Get ticket by ID")
 async def get_ticket_by_id(current_user: CurrentUser, id: int, db: Annotated[AsyncSession, Depends(get_db)]):
-    #validate the ticket Id exits
+    #validate the ticket Id exists
     exists = await validate_ticket_exists(id, db)
-    if exists:
-        try:
-            result = await db.execute(
-                select(models.Ticket)
-                .options(
-                    selectinload(models.Ticket.comments)
-                    .selectinload(models.TicketComments.commented_user)
-                )
-                .where(models.Ticket.id == id)
+    if not exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+    try:
+        result = await db.execute(
+            select(models.Ticket)
+            .options(
+                selectinload(models.Ticket.comments)
+                .selectinload(models.TicketComments.commented_user)
             )
-            ticket = result.scalar_one_or_none()
-        except Exception as e:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error occured")
-        if ticket is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+            .where(models.Ticket.id == id)
+        )
+        ticket = result.scalar_one_or_none()
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error occured")
+    if ticket is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
     return ticket
 
 #---------------- 5. Get Ticket by Ticket Number ----------------
@@ -152,42 +154,43 @@ async def get_ticket_by_ticket_number(current_user: CurrentUser, ticket_number: 
 # ----------------- 6. Update ticket -----------------
 @router.patch("/{id}", response_model=TicketResponse, name="update_ticket", summary="Update ticket")
 async def update_ticket(current_user:CurrentUser, id: int, ticket: TicketUpdate, db: Annotated[AsyncSession, Depends(get_db)]):
-    #Only the user create the ticket and admin can update the ticket
     #Check ticket Exists
     exists = await validate_ticket_exists(id, db)
-    if exists:
-        try:
-            get_ticket = await db.get(models.Ticket,id)
-            if current_user.id != get_ticket.requester_id and current_user.role.name.lower() != RoleEnum.ADMIN.value:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to update the ticket")
-            #validate Priority and Category if provided
-            if ticket.priority_id is not None or ticket.category_id is not None:
-                invalid = await validate_ticket_lookups(
-                    db,
-                    priority_id=ticket.priority_id,
-                    category_id=ticket.category_id,
-                )
-
-                if invalid:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail={"detail": "Invalid reference values", "invalid": invalid},
-                    )
-        
-            ticket_result = await db.get(models.Ticket, id)
-            update_data = ticket.model_dump(exclude_unset=True)
-            for key, value in update_data.items():
-                setattr(ticket_result, key, value)  ## Another way of keyword mapping for databse insertion
-            ticket_result.updated_at = datetime.now(UTC)
-            await db.commit()
-            await db.refresh(ticket_result, attribute_names=["category_id", "assignee_id", "requester_id", "status_id", "priority_id"])
-            return ticket_result
-
-        except Exception as e:
-            await db.rollback()
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    else:
+    if not exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")
+
+    get_ticket = await db.get(models.Ticket, id)
+    #Only the user who created the ticket and admin can update the ticket
+    if current_user.id != get_ticket.requester_id and current_user.role.name.lower() != RoleEnum.ADMIN.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not authorized to update the ticket")
+
+    #validate Priority and Category if provided
+    if ticket.priority_id is not None or ticket.category_id is not None:
+        invalid = await validate_ticket_lookups(
+            db,
+            priority_id=ticket.priority_id,
+            category_id=ticket.category_id,
+        )
+
+        if invalid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"detail": "Invalid reference values", "invalid": invalid},
+            )
+
+    try:
+        ticket_result = await db.get(models.Ticket, id)
+        update_data = ticket.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(ticket_result, key, value)  ## Another way of keyword mapping for database insertion
+        ticket_result.updated_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(ticket_result)
+        return ticket_result
+
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 # ----------------- 7. Status update -----------------
@@ -241,7 +244,7 @@ async def status_update(id: int, ticket: TicketStatusUpdate, current_user:Curren
         await add_ticket_comment(new_comment, db)
         result.updated_at = datetime.now(UTC)
         await db.commit()
-        await db.refresh(result, attribute_names=["category_id", "assignee_id", "requester_id","status_id"])
+        await db.refresh(result)
         return result
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found")

@@ -18,6 +18,12 @@ async def create_category(
     current_user: AdminUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    existing = await db.execute(select(models.Category).where(models.Category.name == category.name.lower()))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Category with this name already exists",
+        )
     new_category = models.Category(**category.model_dump())
     new_category.name = new_category.name.lower()
     try:
@@ -25,11 +31,11 @@ async def create_category(
         await db.commit()
         await db.refresh(new_category)
         return new_category
-    except IntegrityError:
+    except IntegrityError as e:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Category with this name already exists",
+            detail="Please use the unique name for category",
         )
     except Exception:
         await db.rollback()

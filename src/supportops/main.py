@@ -20,11 +20,11 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan,title="SupportOps API")
 
 # Mount / Include the router
-app.include_router(ticket_router, prefix="/tickets", tags=["Tickets"])
-app.include_router(user_router, prefix="/users", tags=["Users"])
-app.include_router(comment_router, prefix="/comments", tags=["Comments"])
-app.include_router(category_router, prefix="/categories", tags=["Categories"])
-app.include_router(auth_router, prefix="/auth/login", tags=["Authentication"])
+app.include_router(ticket_router, prefix="/api/v1/tickets", tags=["Tickets"])
+app.include_router(user_router, prefix="/api/v1/users", tags=["Users"])
+app.include_router(comment_router, prefix="/api/v1/comments", tags=["Comments"])
+app.include_router(category_router, prefix="/api/v1/categories", tags=["Categories"])
+app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 
 
 @app.get("/")

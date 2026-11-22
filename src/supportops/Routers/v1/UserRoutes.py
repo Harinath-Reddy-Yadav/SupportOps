@@ -148,17 +148,17 @@ async def update_user_role(
     if not existing_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    if user_role.role_id is not None:
+        role = await db.get(models.Role, user_role.role_id)
+        if not role:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role ID does not exist")
+
         # Security Rule: Managers cannot assign Admin role
         if current_user.role.name.lower() == "manager" and role.name.lower() == "admin":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Managers are not allowed to create or assign Admin accounts. Please contact admin."
             )
-
-    if user_role.role_id is not None:
-        role = await db.get(models.Role, user_role.role_id)
-        if not role:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role ID does not exist")
         existing_user.role_id = user_role.role_id
 
     try:
